@@ -105,7 +105,9 @@ export class PlanAdapter extends LlmAdapter {
   private async *bound(options: GenerateOptions, captured: Connection, info: LlmResolvedModelInfo): AsyncIterable<StreamChunk> {
     if (options.reasoningEffort !== undefined && !info.reasoning?.efforts.some(e => e.id === options.reasoningEffort)) throw new LlmError('The selected reasoning effort is unavailable for this model.', 'UNSUPPORTED_REASONING_EFFORT')
     const caller = this.work.signal(options.signal)
-    const signal = AbortSignal.any([caller, this.accountController.signal, AbortSignal.timeout(this.options.requestTimeoutMs)])
+    const idle = new AbortController()
+    const idleTimer = setTimeout(() => idle.abort(new DOMException('The ChatGPT response timed out.', 'TimeoutError')), this.options.requestTimeoutMs).unref()
+    const signal = AbortSignal.any([caller, this.accountController.signal, idle.signal])
     let release!: () => void
     const settled = new Promise<void>(resolve => { release = resolve })
     const tracked = this.work.run(async () => settled, signal)
@@ -133,10 +135,11 @@ export class PlanAdapter extends LlmAdapter {
       diagnostic(() => capture?.http(http.status, request_id))
       stream = response
       for await (const event of response) {
+        idleTimer.refresh()
         diagnostic(() => capture?.observe(event)) // Observe before validation, without letting diagnostics reject a stream.
         for (const chunk of translator.push(event)) { diagnostic(() => capture?.translated(chunk)); yield chunk }
       }
-      translator.finish()
+      translator.finish(signal)
       outcome = 'stream-finished'
     } catch (error) {
       outcome = signal.aborted ? 'cancelled' : error instanceof OpenAI.APIError ? 'api-error'
@@ -151,6 +154,7 @@ export class PlanAdapter extends LlmAdapter {
       }
       throw new LlmError('The ChatGPT connection ended unexpectedly; plan usage may have occurred.', 'CHATGPT_PROVIDER_TRANSPORT')
     } finally {
+      clearTimeout(idleTimer)
       if (stream && 'controller' in stream) stream.controller.abort()
       release()
       await Promise.allSettled([tracked])

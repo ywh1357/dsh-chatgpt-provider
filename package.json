@@ -1,6 +1,6 @@
 {
   "name": "dsh-chatgpt-provider",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "DeepSeek Harness ChatGPT provider using official SIWC and the user's authorized ChatGPT plan.",
   "license": "MIT",
   "type": "module",

@@ -7,7 +7,7 @@ kind: "package-bundle"
 
 DeepSeek Harness 模型提供商插件。通过官方 Sign in with ChatGPT（SIWC）授权，在 DSH 中使用 ChatGPT 订阅支持的模型。
 
-**0.1.6** 支持文本、图片和 DSH 函数工具。HTTP/SSE 请求复用会话缓存 key 作为稳定的 `session-id`，每个 fork 和子 Agent 使用 DSH 分配的会话 ID。插件提供可选的脱敏缓存诊断。
+**0.1.7** 支持文本、图片和 DSH 函数工具。HTTP/SSE 请求复用会话缓存 key 作为稳定的 `session-id`，每个 fork 和子 Agent 使用 DSH 分配的会话 ID。插件提供可选的脱敏缓存诊断。
 
 需要 Node.js ≥24.9.0，目标 DSH 版本为 **0.2.1-rc.5**。账号是否可以使用订阅额度、可选模型及额度限制由 OpenAI 的授权和模型目录决定。
 
@@ -20,10 +20,10 @@ npm ci --ignore-scripts --legacy-peer-deps
 npm pack
 ```
 
-在 DSH Desktop 的插件管理器中安装生成的 `dsh-chatgpt-provider-0.1.6.tgz`，然后重启。使用 CLI 的 Web profile 时，运行下面的命令。
+在 DSH Desktop 的插件管理器中安装生成的 `dsh-chatgpt-provider-0.1.7.tgz`，然后重启。使用 CLI 的 Web profile 时，运行下面的命令。
 
 ```powershell
-$bundle = (Resolve-Path .\dsh-chatgpt-provider-0.1.6.tgz).Path
+$bundle = (Resolve-Path .\dsh-chatgpt-provider-0.1.7.tgz).Path
 dsh plugin --profile web add $bundle
 dsh web --no-open
 ```
@@ -56,6 +56,8 @@ npm pack
 ```
 
 `0` 表示使用空闲端口。若模型目录缺少上下文窗口，可在同一 `config` 中配置 `modelContextWindows: { "模型 slug": 128000 }`，数值应以该模型的实际限制为准。全部选项见 `src/index.ts` 的 `Config`。
+
+`requestTimeoutMs` 默认是 180000 毫秒。生成请求开始时计时，收到每个 SSE 事件后重新计时。
 
 ## 脱敏缓存诊断
 

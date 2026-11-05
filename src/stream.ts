@@ -125,5 +125,10 @@ export class Translator {
   }
 
   /** EOF without an authoritative terminal response is a failed request. */
-  finish(): void { if (!this.done) invalid('The ChatGPT stream ended before a terminal response. The request may have consumed plan usage.') }
+  finish(signal?: AbortSignal): void {
+    if (this.done) return
+    // The SDK may end iteration normally when the request is aborted.
+    signal?.throwIfAborted()
+    invalid('The ChatGPT stream ended before a terminal response. The request may have consumed plan usage.')
+  }
 }

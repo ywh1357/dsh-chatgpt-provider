@@ -196,6 +196,56 @@ it('rejects a truncated stream and unsupported controls', async () => {
   await adapter.work.close()
 })
 
+it('reports the request timeout after partial streamed output', async () => {
+  const f = await setup()
+  const normal = wireFetch(textEvents.slice(0, 2), [])
+  const adapter = new PlanAdapter(f.auth, { ...options, requestTimeoutMs: 250 }, async (url, init) => {
+    const response = await normal(url, init)
+    if (String(url).endsWith('/models')) return response
+    const partial = new Uint8Array(await response.arrayBuffer())
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(partial) },
+    }), { headers: response.headers })
+  })
+  const assembler = new BlockAssembler()
+  try {
+    await expect((async () => {
+      for await (const chunk of adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] })) assembler.push(chunk)
+    })()).rejects.toMatchObject({ code: 'CHATGPT_PROVIDER_CANCELLED' })
+    expect(assembler.blocks()).toEqual([{ type: 'text', text: 'hel' }])
+    expect(assembler.replayState).toBeUndefined()
+  } finally { await adapter.work.close() }
+})
+
+it('completes a stream with ongoing output beyond the initial request deadline', async () => {
+  const f = await setup()
+  const normal = wireFetch([], [])
+  let timer: ReturnType<typeof setInterval> | undefined
+  const adapter = new PlanAdapter(f.auth, { ...options, requestTimeoutMs: 250 }, async (url, init) => {
+    if (String(url).endsWith('/models')) return normal(url, init)
+    return new Response(new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder()
+        const send = (event: object) => controller.enqueue(encoder.encode('data: ' + JSON.stringify(event) + '\n\n'))
+        send(textEvents[0]!)
+        let next = 1
+        timer = setInterval(() => {
+          send(textEvents[next++]!)
+          if (next === textEvents.length) { clearInterval(timer); controller.close() }
+        }, 100)
+      },
+      cancel() { clearInterval(timer) },
+    }), { headers: { 'content-type': 'text/event-stream' } })
+  })
+  try {
+    const chunks = await collect(adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] }))
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+  } finally {
+    clearInterval(timer)
+    await adapter.work.close()
+  }
+})
+
 it('aborts network traffic and awaits its settlement on plugin disposal', async () => {
   const f = await setup(), entered = deferred<void>()
   let settled = false
