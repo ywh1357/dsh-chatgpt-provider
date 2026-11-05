@@ -3,6 +3,10 @@
   "version": "0.1.7",
   "description": "DeepSeek Harness ChatGPT provider using official SIWC and the user's authorized ChatGPT plan.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ywh1357/dsh-chatgpt-provider.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=24.9.0",
