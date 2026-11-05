@@ -1,0 +1,7 @@
+- id: credentials
+  disabled: false
+- id: authorization
+  disabled: false
+- insert:
+    - id: chatgpt-provider
+      name: dsh-chatgpt-provider

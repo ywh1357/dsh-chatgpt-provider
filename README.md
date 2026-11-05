@@ -1,0 +1,106 @@
+---
+description: "通过官方 Sign in with ChatGPT 在 DeepSeek Harness 中使用自己的 ChatGPT 订阅额度。"
+kind: "package-bundle"
+---
+
+# DSH ChatGPT Provider
+
+DeepSeek Harness 模型提供商插件。通过官方 Sign in with ChatGPT（SIWC）授权，在 DSH 中使用 ChatGPT 订阅支持的模型。
+
+**0.1.6** 支持文本、图片和 DSH 函数工具。HTTP/SSE 请求复用会话缓存 key 作为稳定的 `session-id`，每个 fork 和子 Agent 使用 DSH 分配的会话 ID。插件提供可选的脱敏缓存诊断。
+
+需要 Node.js ≥24.9.0，目标 DSH 版本为 **0.2.1-rc.5**。账号是否可以使用订阅额度、可选模型及额度限制由 OpenAI 的授权和模型目录决定。
+
+## 安装和使用
+
+在仓库目录生成安装包。
+
+```powershell
+npm ci --ignore-scripts --legacy-peer-deps
+npm pack
+```
+
+在 DSH Desktop 的插件管理器中安装生成的 `dsh-chatgpt-provider-0.1.6.tgz`，然后重启。使用 CLI 的 Web profile 时，运行下面的命令。
+
+```powershell
+$bundle = (Resolve-Path .\dsh-chatgpt-provider-0.1.6.tgz).Path
+dsh plugin --profile web add $bundle
+dsh web --no-open
+```
+
+打开 **设置 → 模型 → ChatGPT plan → 使用 ChatGPT 继续**，再打开授权链接并允许使用订阅额度。卡片显示“已连接”后，在模型选择器里选择 ChatGPT plan 下的模型。若浏览器无法访问 DSH Host 的回环地址，展开“无法自动返回？手动提交回调”，将浏览器地址栏中的完整回调 URL 粘贴并提交。
+
+“管理用量”常驻卡片右侧；点击 **⋯** 展开账号设置，使用“刷新状态”或“退出登录”。异常提示直接显示，不会被折叠隐藏。
+
+选择模型目录中支持图片的模型后，可直接粘贴或上传图片并提问。图片格式、尺寸和完整性检查由 DSH 附件服务处理；已被 DSH 卸载的历史图片保留占位文本，不会重新发送图片字节。纯文本请求的序列化格式保持原样。
+
+请求使用官方 `https://api.openai.com/v1/responses`，通过 OAuth 访问令牌认证。每次请求使用 `store: false`、`stream: true`，完整传递所需历史和工具结果，并保留同账号、同模型下的加密推理内容。仅收到 `response.completed` 才标记成功；额度错误和流中断会作为失败返回。
+
+## 开发与配置
+
+```powershell
+npm ci --ignore-scripts --legacy-peer-deps
+npm run typecheck
+npm test
+npm pack
+```
+
+测试覆盖 OAuth 身份校验、异常回调后的正常登录、跨实例 Token 刷新、旧 Token 的延迟 401、刷新异常后的恢复、明确失效令牌的清除、工具结果回传、JSON 历史恢复、额度错误、请求取消及真实 Cordis Loader 的加载卸载。
+
+默认回调端口是 `1455`。端口被占用时，在 profile 的 `cordis.patch.yml` 中覆盖配置并重启：
+
+```yaml
+- id: chatgpt-provider
+  config:
+    callbackPort: 0
+```
+
+`0` 表示使用空闲端口。若模型目录缺少上下文窗口，可在同一 `config` 中配置 `modelContextWindows: { "模型 slug": 128000 }`，数值应以该模型的实际限制为准。全部选项见 `src/index.ts` 的 `Config`。
+
+## 脱敏缓存诊断
+
+仅安装主 provider 不会记录诊断。另行挂载 `dsh-chatgpt-provider/diagnostics` 才提供可选 sink，该子插件的 `enabled` 也默认为 false。主 provider 的原有配置无需改动；临时诊断 bundle 可以独立禁用或移除。
+
+```yaml
+- insert:
+    - id: siwc-cache-diagnostics
+      name: dsh-chatgpt-provider/diagnostics
+      config:
+        enabled: true
+        directory: 'C:/path/to/siwc-capture'
+        # 改为未来 24 小时内的 ISO 8601 时间。
+        expiresAt: '<YYYY-MM-DDTHH:mm:ss+08:00>'
+        maxRequests: 32
+        maxFileBytes: 1048576
+```
+
+通过插件管理器安装包含上述 patch 的配置 bundle，不要手工改 profile 的 package manifest。替换已经加载的 provider 包后，需要重启 DSH 才能使用新代码；不要把旧 provider 加新诊断插件的组合误认为已经完成采集。
+
+每次插件激活生成新的 `siwc-<随机 runId>.jsonl`，不会覆盖已有文件。首行 `diagnostics-start` 只是诊断文件就绪，不证明已发生真实模型调用；后续 `kind: request` 才是实际请求记录。
+
+记录范围：
+
+- `usage.state` 区分 `missing`、`null`、`object`、`invalid`。`usage.value` 是**归一化前的已知数值 usage 字段**，保留真实字段是否存在，不补 0。非数值被脱敏；未知字段只记数量，不保存其名称或内容。它不是完整原始 HTTP 响应。
+- `normalizedUsage` 是实际交给 DSH 的互斥 uncached/read/write 分类，用于和数值原文比较。验证不通过时可能没有此字段。
+- 记录有限格式的 OpenAI request/response ID、HTTP 状态、终态、耗时和结果类别；未知格式 ID 只存摘要。不会保存 headers、错误消息、异常栈或输出内容。
+- 实际请求体、输入、前 1/4/16/64 KiB 的输入 JSON 前缀、前 64 个输入项、系统/开发者消息、工具、模型、缓存 key、reasoning、账号 scope 和会话仅存 HMAC-SHA256 摘要及必要数量/字节数。前缀边界是 JSON 字节，不是模型 Token 边界；不改变请求本身。
+- HMAC 密钥是每次激活临时生成且不落盘的随机值，因此**只可在同一 runId 内比较**，不能跨重启比较摘要，也不能从日志直接恢复或离线猜测提示词。
+- 到期后停止接纳和写入，自动释放诊断资源；请求数或字节数达到上限后停止。卸载最多等待 2 秒落盘，模型流不等待诊断写入；崩溃、到期、磁盘错误或卸载可能丢失最后的记录。这是 best-effort 诊断，不是交易审计日志。
+
+启用后，在界面选择 **ChatGPT plan / SIWC** 模型，沿用同一会话连续发送 2–3 轮正常消息；尽量保持工具和推理档位不变。无需把真实提示词贴给排查人员。本插件不会自动发起测试，也不会自动切换模型。
+
+在插件管理器禁用诊断 bundle 即可提前停止。诊断文件包含请求 ID、时间和用量，请保存在本地。POSIX 使用私有文件权限，Windows 使用目录现有的 ACL。
+
+## 当前边界
+
+- 支持一个账号注册、文本、用户图片及 DSH 函数工具的图片结果。普通文件仍由 DSH 转为文本。暂不支持图片生成、多账号、WebSocket 和内置工具。目录未声明图片能力的模型继续按文本模型处理。
+- 凭据保存在 DSH Host 的凭据服务中，默认文件为 `$DSH_HOME/.credentials.yaml`。浏览器只收到账号状态。该文件不是系统加密保险箱；Windows 文件 ACL 由 DSH/运行环境管理。
+- 刷新使用 DSH 存储事务串行完成。临时失败会保留已有凭据并返回错误，不立即退出登录。如果服务端已轮换 Token 但响应丢失，后续刷新仍可能返回明确失效错误并要求重新登录；本地无法恢复丢失的新 Token。
+- `temperature`、`stop`、`maxTokens` 不受本插件支持。不会自动重试推理；额度耗尽时应在 ChatGPT 的用量设置中处理。
+- 当前工程测试针对 DSH 0.2.1-rc.5；包声明的 0.2.2-alpha.2 兼容性未在本工程验证。
+
+## 来源
+
+本实现基于 `dsh-chatgpt-plan` 的 MIT 代码。上游版权声明见 `LICENSE`。 [上游源码](https://github.com/yossi-lee/dsh-chatgpt-plan/tree/b18bc4a48b9160b4a7a7014876881f52b89c46e6)
+
+协议依据：[注册与登录](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)、[模型与推理](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)、[账号与续期](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)、[错误恢复](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)。
