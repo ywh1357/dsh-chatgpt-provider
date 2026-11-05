@@ -7,7 +7,7 @@ kind: "package-bundle"
 
 DeepSeek Harness 模型提供商插件。通过官方 Sign in with ChatGPT（SIWC）授权，在 DSH 中使用 ChatGPT 订阅支持的模型。
 
-**0.1.7** 支持文本、图片和 DSH 函数工具。HTTP/SSE 请求复用会话缓存 key 作为稳定的 `session-id`，每个 fork 和子 Agent 使用 DSH 分配的会话 ID。插件提供可选的脱敏缓存诊断。
+**0.1.7** 支持文本、图片和 DSH 函数工具。
 
 需要 Node.js ≥24.9.0，目标 DSH 版本为 **0.2.1-rc.5**。账号是否可以使用订阅额度、可选模型及额度限制由 OpenAI 的授权和模型目录决定。
 
@@ -58,40 +58,6 @@ npm pack
 `0` 表示使用空闲端口。若模型目录缺少上下文窗口，可在同一 `config` 中配置 `modelContextWindows: { "模型 slug": 128000 }`，数值应以该模型的实际限制为准。全部选项见 `src/index.ts` 的 `Config`。
 
 `requestTimeoutMs` 默认是 180000 毫秒。生成请求开始时计时，收到每个 SSE 事件后重新计时。
-
-## 脱敏缓存诊断
-
-仅安装主 provider 不会记录诊断。另行挂载 `dsh-chatgpt-provider/diagnostics` 才提供可选 sink，该子插件的 `enabled` 也默认为 false。主 provider 的原有配置无需改动；临时诊断 bundle 可以独立禁用或移除。
-
-```yaml
-- insert:
-    - id: siwc-cache-diagnostics
-      name: dsh-chatgpt-provider/diagnostics
-      config:
-        enabled: true
-        directory: 'C:/path/to/siwc-capture'
-        # 改为未来 24 小时内的 ISO 8601 时间。
-        expiresAt: '<YYYY-MM-DDTHH:mm:ss+08:00>'
-        maxRequests: 32
-        maxFileBytes: 1048576
-```
-
-通过插件管理器安装包含上述 patch 的配置 bundle，不要手工改 profile 的 package manifest。替换已经加载的 provider 包后，需要重启 DSH 才能使用新代码；不要把旧 provider 加新诊断插件的组合误认为已经完成采集。
-
-每次插件激活生成新的 `siwc-<随机 runId>.jsonl`，不会覆盖已有文件。首行 `diagnostics-start` 只是诊断文件就绪，不证明已发生真实模型调用；后续 `kind: request` 才是实际请求记录。
-
-记录范围：
-
-- `usage.state` 区分 `missing`、`null`、`object`、`invalid`。`usage.value` 是**归一化前的已知数值 usage 字段**，保留真实字段是否存在，不补 0。非数值被脱敏；未知字段只记数量，不保存其名称或内容。它不是完整原始 HTTP 响应。
-- `normalizedUsage` 是实际交给 DSH 的互斥 uncached/read/write 分类，用于和数值原文比较。验证不通过时可能没有此字段。
-- 记录有限格式的 OpenAI request/response ID、HTTP 状态、终态、耗时和结果类别；未知格式 ID 只存摘要。不会保存 headers、错误消息、异常栈或输出内容。
-- 实际请求体、输入、前 1/4/16/64 KiB 的输入 JSON 前缀、前 64 个输入项、系统/开发者消息、工具、模型、缓存 key、reasoning、账号 scope 和会话仅存 HMAC-SHA256 摘要及必要数量/字节数。前缀边界是 JSON 字节，不是模型 Token 边界；不改变请求本身。
-- HMAC 密钥是每次激活临时生成且不落盘的随机值，因此**只可在同一 runId 内比较**，不能跨重启比较摘要，也不能从日志直接恢复或离线猜测提示词。
-- 到期后停止接纳和写入，自动释放诊断资源；请求数或字节数达到上限后停止。卸载最多等待 2 秒落盘，模型流不等待诊断写入；崩溃、到期、磁盘错误或卸载可能丢失最后的记录。这是 best-effort 诊断，不是交易审计日志。
-
-启用后，在界面选择 **ChatGPT plan / SIWC** 模型，沿用同一会话连续发送 2–3 轮正常消息；尽量保持工具和推理档位不变。无需把真实提示词贴给排查人员。本插件不会自动发起测试，也不会自动切换模型。
-
-在插件管理器禁用诊断 bundle 即可提前停止。诊断文件包含请求 ID、时间和用量，请保存在本地。POSIX 使用私有文件权限，Windows 使用目录现有的 ACL。
 
 ## 当前边界
 
