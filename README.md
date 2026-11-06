@@ -5,6 +5,9 @@ kind: "package-bundle"
 
 # DSH ChatGPT Provider
 
+[![CI / Publish](https://github.com/ywh1357/dsh-chatgpt-provider/actions/workflows/publish.yml/badge.svg)](https://github.com/ywh1357/dsh-chatgpt-provider/actions/workflows/publish.yml)
+[![npm version](https://img.shields.io/npm/v/dsh-chatgpt-provider.svg)](https://www.npmjs.com/package/dsh-chatgpt-provider)
+
 DeepSeek Harness 模型提供商插件。通过官方 Sign in with ChatGPT（SIWC）授权，在 DSH 中使用 ChatGPT 订阅支持的模型。
 
 **0.1.7** 支持文本、图片和 DSH 函数工具。
