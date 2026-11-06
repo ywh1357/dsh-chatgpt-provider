@@ -16,6 +16,26 @@ DeepSeek Harness 模型提供商插件。通过官方 Sign in with ChatGPT（SIW
 
 ## 安装和使用
 
+### 从 npm 安装
+
+使用 CLI 的 Web profile 时，直接从 npm 安装已发布的插件：
+
+```shell
+dsh plugin --profile web add dsh-chatgpt-provider
+dsh web --no-open
+```
+
+如果没有全局安装 `dsh`，可以通过 `npx` 执行：
+
+```shell
+npx @deepseek-ai/dsh plugin --profile web add dsh-chatgpt-provider
+npx @deepseek-ai/dsh web --no-open
+```
+
+需要固定版本时，将包名替换为 `dsh-chatgpt-provider@0.1.7`。插件安装到指定的 profile；上述命令针对 Web profile，不会安装到 DSH Desktop。安装后重启对应的 DSH 实例，再按下方步骤登录。
+
+### 从源码打包安装
+
 在仓库目录生成安装包。
 
 ```powershell
@@ -30,6 +50,8 @@ $bundle = (Resolve-Path .\dsh-chatgpt-provider-0.1.7.tgz).Path
 dsh plugin --profile web add $bundle
 dsh web --no-open
 ```
+
+### 登录和使用
 
 打开 **设置 → 模型 → ChatGPT plan → 使用 ChatGPT 继续**，再打开授权链接并允许使用订阅额度。卡片显示“已连接”后，在模型选择器里选择 ChatGPT plan 下的模型。若浏览器无法访问 DSH Host 的回环地址，展开“无法自动返回？手动提交回调”，将浏览器地址栏中的完整回调 URL 粘贴并提交。
 
