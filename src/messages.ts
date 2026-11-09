@@ -78,9 +78,11 @@ async function imageParts(blocks: readonly ContentBlock[], readImage?: ImageRead
   return parts
 }
 
-/** Serialize only supported SIWC inputs; never silently omit an unsupported request option. */
+/** Serialize supported SIWC inputs. */
 export async function requestBody(options: GenerateOptions, scope: string, readImage?: ImageReader): Promise<ResponseCreateParamsStreaming> {
-  if (options.stop !== undefined || options.temperature !== undefined || options.maxTokens !== undefined) {
+  // DSH supplies a summary budget for compaction, but SIWC cannot enforce it.
+  const unsupportedOutputLimit = options.maxTokens !== undefined && options.purpose !== 'compaction'
+  if (options.stop !== undefined || options.temperature !== undefined || unsupportedOutputLimit) {
     throw new LlmError('ChatGPT plan requests do not support stop, temperature or output-token limits.', 'UNSUPPORTED_OPTION')
   }
   const input: ResponseInputItem[] = []

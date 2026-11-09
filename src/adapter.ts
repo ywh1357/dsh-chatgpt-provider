@@ -8,7 +8,7 @@ import type { PlanAuth, Connection } from './auth.ts'
 import { RESOURCE } from './auth.ts'
 import type { Options } from './types.ts'
 import { Work } from './work.ts'
-import { invalid, providerError } from './errors.ts'
+import { cancelled, invalid, providerError, signInRequired } from './errors.ts'
 import { effortSchema, requestBody } from './messages.ts'
 import { Translator } from './stream.ts'
 import type { DiagnosticCapture, DiagnosticOutcome, DiagnosticSink } from './diagnostics.ts'
@@ -44,8 +44,20 @@ export class PlanAdapter extends LlmAdapter {
   private async captured(signal?: AbortSignal): Promise<Connection> {
     this.work.signal(signal).throwIfAborted()
     const connection = await this.auth.connection()
-    if (!connection) throw providerError('', 401)
+    if (!connection) throw signInRequired()
     return connection
+  }
+
+  private async requestFailure(code: string, status: number | undefined, token: Connection, signal: AbortSignal): Promise<LlmError> {
+    if (signal.aborted) return cancelled()
+    if (status === 401) {
+      try { await this.auth.checkRejected(token, signal) }
+      catch (error) {
+        if (signal.aborted) return cancelled()
+        if (error instanceof LlmError) return error
+      }
+    }
+    return providerError(code, status)
   }
 
   private async catalog(connection: Connection, signal?: AbortSignal): Promise<Model[]> {
@@ -54,8 +66,8 @@ export class PlanAdapter extends LlmAdapter {
       const token = await this.auth.usable(connection.epoch, bounded)
       const response = await this.fetcher(`${RESOURCE}/models`, { signal: bounded, redirect: 'error', headers: { ...attributionHeaders(), authorization: `Bearer ${token.accessToken}` } })
       if (!response.ok) {
-        if (response.status === 401) await this.auth.invalidate(token.epoch, token.accessToken)
-        throw providerError('', response.status)
+        const error = await response.json().catch(() => undefined)
+        throw await this.requestFailure(typeof error?.error?.code === 'string' ? error.error.code : '', response.status, token, bounded)
       }
       const value = catalogSchema.safeParse(await response.json())
       if (!value.success) throw new LlmError('ChatGPT returned an invalid model catalog.', 'CHATGPT_PROVIDER_INVALID_DATA')
@@ -147,10 +159,10 @@ export class PlanAdapter extends LlmAdapter {
       if (error instanceof OpenAI.APIError) diagnostic(() => capture?.http(error.status, error.requestID))
       yield* translator.close()
       if (error instanceof LlmError) throw error
-      if (signal.aborted) throw new LlmError('The ChatGPT request was cancelled or timed out; plan usage may have occurred.', 'CHATGPT_PROVIDER_CANCELLED')
+      if (signal.aborted) throw cancelled()
       if (error instanceof OpenAI.APIError) {
-        if (error.status === 401 && token) await this.auth.invalidate(token.epoch, token.accessToken)
-        throw providerError(typeof error.code === 'string' ? error.code : '', error.status)
+        const code = typeof error.code === 'string' ? error.code : ''
+        throw token ? await this.requestFailure(code, error.status, token, signal) : providerError(code, error.status)
       }
       throw new LlmError('The ChatGPT connection ended unexpectedly; plan usage may have occurred.', 'CHATGPT_PROVIDER_TRANSPORT')
     } finally {

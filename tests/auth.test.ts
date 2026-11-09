@@ -123,6 +123,7 @@ it.each(['iso', 'seconds'])('honors an earliest-refresh time encoded as %s', asy
   const connection = (await f.auth.connection())!
   f.advance(3500000)
   await f.auth.usable(connection.epoch, new AbortController().signal)
+  await f.auth.checkRejected(connection, new AbortController().signal)
   expect(f.refreshes()).toBe(0)
   f.advance(200000)
   await expect(f.auth.usable(connection.epoch, new AbortController().signal)).rejects.toMatchObject({ code: 'CHATGPT_PROVIDER_REFRESH_NOT_READY' })

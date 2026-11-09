@@ -10,7 +10,7 @@ kind: "package-bundle"
 
 DeepSeek Harness 模型提供商插件。通过官方 Sign in with ChatGPT（SIWC）授权，在 DSH 中使用 ChatGPT 订阅支持的模型。
 
-**0.1.7** 支持文本、图片和 DSH 函数工具。
+**0.1.9** 支持文本、图片和 DSH 函数工具。
 
 需要 Node.js ≥24.9.0，目标 DSH 版本为 **0.2.1-rc.5**。账号是否可以使用订阅额度、可选模型及额度限制由 OpenAI 的授权和模型目录决定。
 
@@ -32,7 +32,7 @@ npx @deepseek-ai/dsh plugin --profile web add dsh-chatgpt-provider
 npx @deepseek-ai/dsh web --no-open
 ```
 
-需要固定版本时，将包名替换为 `dsh-chatgpt-provider@0.1.7`。插件安装到指定的 profile；上述命令针对 Web profile，不会安装到 DSH Desktop。安装后重启对应的 DSH 实例，再按下方步骤登录。
+需要固定版本时，将包名替换为 `dsh-chatgpt-provider@0.1.9`。插件安装到指定的 profile；上述命令针对 Web profile，不会安装到 DSH Desktop。安装后重启对应的 DSH 实例，再按下方步骤登录。
 
 ### 从源码打包安装
 
@@ -43,10 +43,10 @@ npm ci --ignore-scripts --legacy-peer-deps
 npm pack
 ```
 
-在 DSH Desktop 的插件管理器中安装生成的 `dsh-chatgpt-provider-0.1.7.tgz`，然后重启。使用 CLI 的 Web profile 时，运行下面的命令。
+在 DSH Desktop 的插件管理器中安装生成的 `dsh-chatgpt-provider-0.1.9.tgz`，然后重启。使用 CLI 的 Web profile 时，运行下面的命令。
 
 ```powershell
-$bundle = (Resolve-Path .\dsh-chatgpt-provider-0.1.7.tgz).Path
+$bundle = (Resolve-Path .\dsh-chatgpt-provider-0.1.9.tgz).Path
 dsh plugin --profile web add $bundle
 dsh web --no-open
 ```
@@ -88,8 +88,8 @@ npm pack
 
 - 支持一个账号注册、文本、用户图片及 DSH 函数工具的图片结果。普通文件仍由 DSH 转为文本。暂不支持图片生成、多账号、WebSocket 和内置工具。目录未声明图片能力的模型继续按文本模型处理。
 - 凭据保存在 DSH Host 的凭据服务中，默认文件为 `$DSH_HOME/.credentials.yaml`。浏览器只收到账号状态。该文件不是系统加密保险箱；Windows 文件 ACL 由 DSH/运行环境管理。
-- 刷新使用 DSH 存储事务串行完成。临时失败会保留已有凭据并返回错误，不立即退出登录。如果服务端已轮换 Token 但响应丢失，后续刷新仍可能返回明确失效错误并要求重新登录；本地无法恢复丢失的新 Token。
-- `temperature`、`stop`、`maxTokens` 不受本插件支持。不会自动重试推理；额度耗尽时应在 ChatGPT 的用量设置中处理。
+- 刷新使用 DSH 存储事务串行完成。收到 401 后会在允许刷新时核验当前凭据，确认刷新令牌失效才要求重新登录。503 会保留连接并提示稍后重试。如果服务端已轮换 Token 但响应丢失，后续刷新仍可能确认旧令牌失效并要求重新登录。
+- 普通请求不支持 `temperature`、`stop`、`maxTokens`。DSH 摘要压缩请求使用 SIWC 的输出限制，省略 DSH 自带的 `maxTokens`。不会自动重试推理，额度耗尽时应在 ChatGPT 的用量设置中处理。
 - 当前工程测试针对 DSH 0.2.1-rc.5；包声明的 0.2.2-alpha.2 兼容性未在本工程验证。
 
 ## 来源

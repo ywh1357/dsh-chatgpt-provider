@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from 'vitest'
 import { BlockAssembler, createMessage, createUserMessage, ToolCallId, ReasoningEffortId, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { PlanAdapter } from '../src/adapter.ts'
+import { PlanAuth } from '../src/auth.ts'
 import { requestBody } from '../src/messages.ts'
 import { collect, deferred, fixture, imageRef, imageURL, imageVersion, message, options, textEvents, wireFetch } from './helpers.ts'
 
@@ -178,13 +179,17 @@ it('keeps catalog models when a server adds an effort outside the installed SDK'
   await adapter.work.close()
 })
 
-it('reports a midstream plan limit without success or replay data', async () => {
+it.each([
+  ['subscription_sharing_usage_limit_exceeded', 'CHATGPT_PROVIDER_LIMIT'],
+  ['subscription_sharing_usage_unavailable', 'CHATGPT_PROVIDER_UNAVAILABLE'],
+])('reports midstream %s without losing the login', async (upstream, code) => {
   const f = await setup()
-  const adapter = new PlanAdapter(f.auth, options, wireFetch([...textEvents.slice(0, 2), { type: 'response.failed', response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } }], []))
+  const adapter = new PlanAdapter(f.auth, options, wireFetch([...textEvents.slice(0, 2), { type: 'response.failed', response: { error: { code: upstream } } }], []))
   const assembler = new BlockAssembler()
   for await (const chunk of adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] })) assembler.push(chunk)
-  expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'CHATGPT_PROVIDER_LIMIT' } })
+  expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code } })
   expect(assembler.replayState).toBeUndefined()
+  expect(await f.auth.connection()).toBeDefined()
   await adapter.work.close()
 })
 
@@ -194,6 +199,19 @@ it('rejects a truncated stream and unsupported controls', async () => {
   await expect(collect(adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] }))).rejects.toThrow('terminal')
   await expect(requestBody({ provider: 'chatgpt-provider', model: 'test-model', messages: [], maxTokens: 10 }, 'scope')).rejects.toThrow('do not support')
   await adapter.work.close()
+})
+
+it('completes a DSH compaction request without sending an output-token limit', async () => {
+  const f = await setup(), requests: { body: unknown; authorization: string | null }[] = []
+  const adapter = new PlanAdapter(f.auth, options, wireFetch(textEvents, requests))
+  const assembler = new BlockAssembler()
+  try {
+    for await (const chunk of adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [], purpose: 'compaction', maxTokens: 65536 })) assembler.push(chunk)
+    expect(assembler.blocks()).toEqual([{ type: 'text', text: 'hello' }])
+    expect(assembler.finish).toEqual({ kind: 'stop' })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.body).not.toHaveProperty('max_output_tokens')
+  } finally { await adapter.work.close() }
 })
 
 it('reports the request timeout after partial streamed output', async () => {
@@ -271,14 +289,52 @@ it('rejects a response that contradicts already completed visible output', async
   await adapter.work.close()
 })
 
-it.each(['models', 'responses'])('retires the current API-rejected token on %s without falling back to ambient API keys', async endpoint => {
+it.each(['models', 'responses'])('preserves the login and checks the rejected token after a %s 401', async endpoint => {
   const f = await setup()
   const normal = wireFetch(textEvents, [])
   const adapter = new PlanAdapter(f.auth, options, async (url, init) => String(url).endsWith(`/${endpoint}`) ? new Response('{}', { status: 401 }) : normal(url, init))
   const result = endpoint === 'models' ? adapter.listModels('chatgpt-provider') : collect(adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] }))
-  await expect(result).rejects.toMatchObject({ code: 'CHATGPT_PROVIDER_SIGN_IN_REQUIRED' })
-  expect(await f.auth.connection()).toBeUndefined()
+  await expect(result).rejects.toMatchObject({ code: 'CHATGPT_PROVIDER_AUTH_REJECTED' })
+  expect((await f.auth.connection())?.accessToken).toBe('access-1')
+  expect(f.refreshes()).toBe(1)
   await adapter.work.close()
+})
+
+it.each([
+  [400, 'invalid_grant', 'CHATGPT_PROVIDER_SIGN_IN_REQUIRED', false],
+  [503, 'temporarily_unavailable', 'CHATGPT_PROVIDER_UNAVAILABLE', true],
+])('recovers from inference 401 according to the refresh response %s %s', async (status, refreshError, code, signedIn) => {
+  const f = await setup()
+  let checks = 0
+  const auth = new PlanAuth(f.ctx.credentials, options, {
+    ...f.network,
+    fetch: async () => {
+      checks++
+      return Response.json({ error: refreshError }, { status })
+    },
+  })
+  const normal = wireFetch(textEvents, [])
+  const adapter = new PlanAdapter(auth, options, (url, init) => String(url).endsWith('/responses')
+    ? Promise.resolve(Response.json({ error: { code: 'subscription_sharing_invalid_user' } }, { status: 401 }))
+    : normal(url, init))
+  try {
+    await expect(collect(adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] }))).rejects.toMatchObject({ code })
+    expect(checks).toBe(1)
+    expect(Boolean(await auth.connection())).toBe(signedIn)
+  } finally { await adapter.work.close() }
+})
+
+it.each(['models', 'responses'])('reports a temporary %s 503 and retains the saved login', async endpoint => {
+  const f = await setup(), normal = wireFetch(textEvents, [])
+  const connection = await f.auth.connection()
+  const adapter = new PlanAdapter(f.auth, options, async (url, init) => String(url).endsWith(`/${endpoint}`)
+    ? Response.json({ error: { code: 'subscription_sharing_usage_unavailable' } }, { status: 503 })
+    : normal(url, init))
+  try {
+    const result = endpoint === 'models' ? adapter.listModels('chatgpt-provider') : collect(adapter.stream({ provider: 'chatgpt-provider', model: 'test-model', messages: [] }))
+    await expect(result).rejects.toMatchObject({ code: 'CHATGPT_PROVIDER_UNAVAILABLE', message: expect.stringContaining('Try again later') })
+    expect(await f.auth.connection()).toEqual(connection)
+  } finally { await adapter.work.close() }
 })
 
 it.each(['models', 'responses'])('keeps the refreshed login usable after an older %s request returns 401', async endpoint => {
@@ -300,8 +356,9 @@ it.each(['models', 'responses'])('keeps the refreshed login usable after an olde
     f.advance(3500000)
     await f.auth.usable(connection.epoch, new AbortController().signal)
     release.resolve()
-    expect(await observed).toMatchObject({ code: 'CHATGPT_PROVIDER_SIGN_IN_REQUIRED' })
+    expect(await observed).toMatchObject({ code: 'CHATGPT_PROVIDER_AUTH_REJECTED' })
     expect(await f.auth.connection()).toBeDefined()
+    expect(f.refreshes()).toBe(1)
     const assembler = new BlockAssembler()
     for await (const chunk of adapter.stream(request)) assembler.push(chunk)
     expect(assembler.blocks()).toEqual([{ type: 'text', text: 'hello' }])

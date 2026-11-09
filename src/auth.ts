@@ -9,7 +9,7 @@ import { credentialKey, type CredentialProvider, type CredentialRecord } from '@
 import type { AuthorizationSession } from '@deepseek-ai/dsh-authorization'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { Options } from './types.ts'
-import { invalid, providerError } from './errors.ts'
+import { invalid, providerError, signInRequired } from './errors.ts'
 
 export const KEY = credentialKey('chatgpt-provider', 'connection')
 export const RESOURCE = 'https://api.openai.com/v1'
@@ -159,9 +159,11 @@ export class PlanAuth {
       body: new URLSearchParams(fields), signal: requestSignal, redirect: 'error',
     })
     if (!response.ok) {
+      if (response.status === 503) throw providerError('', response.status)
       const error = z.object({ error: z.string() }).safeParse(await response.json().catch(() => undefined))
-      if (error.success && ['invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'].includes(error.data.error)) {
-        throw providerError('invalid_grant', response.status)
+      if ((response.status === 400 || response.status === 401) && error.success
+        && ['invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'].includes(error.data.error)) {
+        throw signInRequired(response.status)
       }
       throw new LlmError('The ChatGPT token request failed. Check your connection and app registration, then try again.', 'CHATGPT_PROVIDER_TOKEN_REQUEST_FAILED', { status: response.status })
     }
@@ -205,18 +207,30 @@ export class PlanAuth {
 
   /** Refresh under the store lock; a stale request cannot adopt a replacement login. */
   async usable(epoch: string, callerSignal: AbortSignal): Promise<Connection> {
+    const result = await this.renew(epoch, callerSignal)
+    if (!result) throw signInRequired()
+    return result
+  }
+
+  /** Check only the rejected token that is still current. A refresh error can confirm revocation. */
+  async checkRejected(token: Connection, signal: AbortSignal): Promise<void> {
+    await this.renew(token.epoch, signal, token.accessToken)
+  }
+
+  private async renew(epoch: string, callerSignal: AbortSignal, rejectedAccessToken?: string): Promise<Connection | undefined> {
     const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(this.options.authRequestTimeoutMs)])
     let result: Connection | undefined
     let failure: unknown
     await this.credentials.modifyRecord(KEY, async record => {
       const state = read(record), current = state?.connection
-      if (!state || !current || current.epoch !== epoch) throw providerError('', 401)
+      if (!state || !current || current.epoch !== epoch || (rejectedAccessToken !== undefined && current.accessToken !== rejectedAccessToken)) return undefined
       signal.throwIfAborted()
       const now = this.network.now()
       if (current.expiresAt <= now && (current.earliestRefreshAt ?? 0) > now) {
         throw new LlmError('ChatGPT has not permitted token refresh yet. Wait before trying again.', 'CHATGPT_PROVIDER_REFRESH_NOT_READY', { providerRetryAfterMs: current.earliestRefreshAt! - now })
       }
-      if (current.expiresAt > now + this.options.refreshMarginMs || (current.expiresAt > now && (current.earliestRefreshAt ?? 0) > now)) {
+      if ((rejectedAccessToken === undefined && current.expiresAt > now + this.options.refreshMarginMs)
+        || (current.expiresAt > now && (current.earliestRefreshAt ?? 0) > now)) {
         result = current; return undefined
       }
       try {
@@ -231,19 +245,7 @@ export class PlanAuth {
       }
     })
     if (failure !== undefined) throw failure
-    if (!result) throw providerError('', 401)
     return result
-  }
-
-  /** Forget only the rejected token, preserving a newer login or refresh. */
-  async invalidate(epoch: string, accessToken: string): Promise<void> {
-    await this.credentials.modifyRecord(KEY, async record => {
-      const state = read(record)
-      if (!state?.connection || state.connection.epoch !== epoch || state.connection.accessToken !== accessToken) return undefined
-      const { connection: discarded, ...retained } = state
-      void discarded
-      return stored(retained)
-    })
   }
 
   /** Clear local tokens even when remote revocation cannot be confirmed. */
