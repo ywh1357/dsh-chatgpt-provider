@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AuthorizationInteraction, AuthorizationPrompt } from '@deepseek-ai/dsh-authorization'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { KEY, type PlanAuth } from './auth.ts'
+import { providerFailure } from './errors.ts'
 import type { AccountStatus, Options } from './types.ts'
 import { Work } from './work.ts'
 
@@ -32,7 +33,7 @@ export class PlanRuntime {
   /** Start login and return when its authorization URL is available. */
   async begin(): Promise<AccountStatus> {
     this.work.signal()
-    if (this.pending) throw new LlmError('A ChatGPT sign-in is already in progress.', 'CHATGPT_PROVIDER_LOGIN_IN_PROGRESS')
+    if (this.pending) throw providerFailure('A ChatGPT sign-in is already in progress.', 'CHATGPT_PROVIDER_LOGIN_IN_PROGRESS')
     this.error = undefined
     let ready!: () => void
     const announced = new Promise<void>(resolve => { ready = resolve })
@@ -44,8 +45,9 @@ export class PlanRuntime {
       try {
         await this.ctx.authorization.begin({ key: KEY, method: 'oauth', interaction, signal })
       } catch (error) {
-        if (!signal.aborted) this.error = error instanceof LlmError && (error.code === 'CHATGPT_PROVIDER_CONSENT_DENIED' || error.code === 'CHATGPT_PROVIDER_CONSENT_REQUIRED') ? 'consent'
-          : error instanceof LlmError && error.code === 'CHATGPT_PROVIDER_INVALID_DATA' ? 'identity' : 'signIn'
+        const code = error instanceof LlmError ? error.failure.code : undefined
+        if (!signal.aborted) this.error = code === 'CHATGPT_PROVIDER_CONSENT_DENIED' || code === 'CHATGPT_PROVIDER_CONSENT_REQUIRED' ? 'consent'
+          : code === 'CHATGPT_PROVIDER_INVALID_DATA' ? 'identity' : 'signIn'
       } finally {
         this.url = undefined; this.pending = undefined; this.submitCallback = undefined
         ready()
@@ -67,7 +69,7 @@ export class PlanRuntime {
 
   /** Finish the pending loopback flow from the full browser redirect URL. */
   async submit(value: string): Promise<AccountStatus> {
-    if (typeof value !== 'string' || value.length > 16384 || !this.submitCallback) throw new LlmError('There is no pending ChatGPT callback to submit.', 'CHATGPT_PROVIDER_NO_LOGIN')
+    if (typeof value !== 'string' || value.length > 16384 || !this.submitCallback) throw providerFailure('There is no pending ChatGPT callback to submit.', 'CHATGPT_PROVIDER_NO_LOGIN')
     this.submitCallback(value)
     await this.pending
     return this.status()

@@ -9,7 +9,7 @@ import { credentialKey, type CredentialProvider, type CredentialRecord } from '@
 import type { AuthorizationSession } from '@deepseek-ai/dsh-authorization'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { Options } from './types.ts'
-import { invalid, providerError, signInRequired } from './errors.ts'
+import { invalid, providerError, providerFailure, signInRequired } from './errors.ts'
 
 export const KEY = credentialKey('chatgpt-provider', 'connection')
 export const RESOURCE = 'https://api.openai.com/v1'
@@ -132,7 +132,7 @@ export class PlanAuth {
           else signal.addEventListener('abort', () => reject(signal.reason), { once: true, signal: manualController.signal })
         })
         const returned = await Promise.race([callback, pasted, cancelled])
-        if (returned.searchParams.has('error')) throw new LlmError('ChatGPT authorization was declined. You can sign in again.', 'CHATGPT_PROVIDER_CONSENT_DENIED')
+        if (returned.searchParams.has('error')) throw providerFailure('ChatGPT authorization was declined. You can sign in again.', 'CHATGPT_PROVIDER_CONSENT_DENIED')
         const clientId = returned.searchParams.get('client_id') ?? state.registration?.clientId
         if (!clientId || clientId === 'dynamic_agent_client' || (state.registration && clientId !== state.registration.clientId)) {
           invalid('OpenAI did not return the expected client registration. Sign in again.')
@@ -165,7 +165,7 @@ export class PlanAuth {
         && ['invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'].includes(error.data.error)) {
         throw signInRequired(response.status)
       }
-      throw new LlmError('The ChatGPT token request failed. Check your connection and app registration, then try again.', 'CHATGPT_PROVIDER_TOKEN_REQUEST_FAILED', { status: response.status })
+      throw providerFailure('The ChatGPT token request failed. Check your connection and app registration, then try again.', 'CHATGPT_PROVIDER_TOKEN_REQUEST_FAILED', { status: response.status })
     }
     const value = tokenSchema.safeParse(await response.json())
     if (!value.success) invalid('OpenAI returned invalid OAuth credentials. Sign in again.')
@@ -196,7 +196,7 @@ export class PlanAuth {
     }
     if (!identity) invalid('ChatGPT identity is missing.')
     const scopes = token.scope?.split(/\s+/).filter(Boolean) ?? previous?.scopes ?? []
-    if (!scopes.includes(PLAN_SCOPE)) throw new LlmError('ChatGPT plan use was not authorized. Sign in and allow plan usage.', 'CHATGPT_PROVIDER_CONSENT_REQUIRED')
+    if (!scopes.includes(PLAN_SCOPE)) throw providerFailure('ChatGPT plan use was not authorized. Sign in and allow plan usage.', 'CHATGPT_PROVIDER_CONSENT_REQUIRED')
     return {
       clientId, subject: identity.subject, ...identity.email === undefined ? {} : { email: identity.email },
       epoch: previous?.epoch ?? randomUUID(), accessToken: token.access_token, refreshToken: token.refresh_token, idToken,
@@ -227,7 +227,7 @@ export class PlanAuth {
       signal.throwIfAborted()
       const now = this.network.now()
       if (current.expiresAt <= now && (current.earliestRefreshAt ?? 0) > now) {
-        throw new LlmError('ChatGPT has not permitted token refresh yet. Wait before trying again.', 'CHATGPT_PROVIDER_REFRESH_NOT_READY', { providerRetryAfterMs: current.earliestRefreshAt! - now })
+        throw providerFailure('ChatGPT has not permitted token refresh yet. Wait before trying again.', 'CHATGPT_PROVIDER_REFRESH_NOT_READY', { providerRetryAfterMs: current.earliestRefreshAt! - now })
       }
       if ((rejectedAccessToken === undefined && current.expiresAt > now + this.options.refreshMarginMs)
         || (current.expiresAt > now && (current.earliestRefreshAt ?? 0) > now)) {
@@ -238,7 +238,7 @@ export class PlanAuth {
         return stored({ ...state, connection: result })
       } catch (error) {
         failure = error
-        if (!(error instanceof LlmError) || error.code !== 'CHATGPT_PROVIDER_SIGN_IN_REQUIRED') return undefined
+        if (!(error instanceof LlmError) || error.failure.code !== 'CHATGPT_PROVIDER_SIGN_IN_REQUIRED') return undefined
         const { connection: discarded, ...retained } = state
         void discarded
         return stored(retained)
