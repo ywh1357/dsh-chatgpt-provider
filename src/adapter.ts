@@ -8,7 +8,7 @@ import type { PlanAuth, Connection } from './auth.ts'
 import { RESOURCE } from './auth.ts'
 import type { Options } from './types.ts'
 import { Work } from './work.ts'
-import { cancelled, invalid, providerError, signInRequired } from './errors.ts'
+import { cancelled, invalid, providerError, providerFailure, signInRequired } from './errors.ts'
 import { effortSchema, requestBody } from './messages.ts'
 import { Translator } from './stream.ts'
 import type { DiagnosticCapture, DiagnosticOutcome, DiagnosticSink } from './diagnostics.ts'
@@ -70,7 +70,7 @@ export class PlanAdapter extends LlmAdapter {
         throw await this.requestFailure(typeof error?.error?.code === 'string' ? error.error.code : '', response.status, token, bounded)
       }
       const value = catalogSchema.safeParse(await response.json())
-      if (!value.success) throw new LlmError('ChatGPT returned an invalid model catalog.', 'CHATGPT_PROVIDER_INVALID_DATA')
+      if (!value.success) invalid('ChatGPT returned an invalid model catalog.')
       return value.data.models.filter(m => m.visibility === undefined || m.visibility === 'list')
     }, signal)
   }
@@ -83,7 +83,7 @@ export class PlanAdapter extends LlmAdapter {
 
   private async describe(provider: string, model: string, connection: Connection, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const item = (await this.catalog(connection, signal)).find(m => m.slug === model)
-    if (!item) throw new LlmError('The selected model is absent from this ChatGPT account catalog. Refresh the model selection.', 'CHATGPT_PROVIDER_MODEL_UNAVAILABLE')
+    if (!item) throw providerFailure('The selected model is absent from this ChatGPT account catalog. Refresh the model selection.', 'CHATGPT_PROVIDER_MODEL_UNAVAILABLE')
     const capacity = (Object.hasOwn(this.options.modelContextWindows, model) ? this.options.modelContextWindows[model] : undefined) ?? item.context_window
     const efforts = item.supported_reasoning_levels?.filter(level => effortSchema.safeParse(level.effort).success)
     return {
@@ -155,7 +155,7 @@ export class PlanAdapter extends LlmAdapter {
       outcome = 'stream-finished'
     } catch (error) {
       outcome = signal.aborted ? 'cancelled' : error instanceof OpenAI.APIError ? 'api-error'
-        : error instanceof LlmError ? (error.code === 'CHATGPT_PROVIDER_INVALID_DATA' ? 'invalid-data' : 'provider-error') : 'transport-error'
+        : error instanceof LlmError ? (error.failure.code === 'CHATGPT_PROVIDER_INVALID_DATA' ? 'invalid-data' : 'provider-error') : 'transport-error'
       if (error instanceof OpenAI.APIError) diagnostic(() => capture?.http(error.status, error.requestID))
       yield* translator.close()
       if (error instanceof LlmError) throw error
@@ -164,7 +164,7 @@ export class PlanAdapter extends LlmAdapter {
         const code = typeof error.code === 'string' ? error.code : ''
         throw token ? await this.requestFailure(code, error.status, token, signal) : providerError(code, error.status)
       }
-      throw new LlmError('The ChatGPT connection ended unexpectedly; plan usage may have occurred.', 'CHATGPT_PROVIDER_TRANSPORT')
+      throw providerFailure('The ChatGPT connection ended unexpectedly; plan usage may have occurred.', 'CHATGPT_PROVIDER_TRANSPORT')
     } finally {
       clearTimeout(idleTimer)
       if (stream && 'controller' in stream) stream.controller.abort()

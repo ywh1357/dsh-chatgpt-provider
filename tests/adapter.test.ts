@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
+import type {} from '@deepseek-ai/dsh-compaction-basic'
 import { BlockAssembler, createMessage, createUserMessage, ToolCallId, ReasoningEffortId, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { PlanAdapter } from '../src/adapter.ts'
 import { PlanAuth } from '../src/auth.ts'
